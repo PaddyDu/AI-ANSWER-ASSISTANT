@@ -366,6 +366,17 @@ async function injectContentScript(tabId) {
       files: ["content.css"],
     });
 
+    // 注入主世界接口钩子（程序化注入时机较晚，可能漏抓早期请求，刷新页面可重抓）
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        files: ["inject/api-hook.js"],
+      });
+    } catch (e) {
+      console.warn("[popup] 注入主世界接口钩子失败:", e);
+    }
+
     // 按顺序注入 JS 模块
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -374,6 +385,7 @@ async function injectContentScript(tabId) {
         "modules/template-manager.js",
         "modules/scanner-enhanced.js",
         "modules/template-generator.js",
+        "modules/api-capture.js",
         "content.js",
       ],
     });

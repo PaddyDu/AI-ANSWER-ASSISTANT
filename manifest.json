@@ -28,11 +28,18 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
+      "js": ["inject/api-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["<all_urls>"],
       "js": [
         "modules/site-matcher.js",
         "modules/template-manager.js",
         "modules/scanner-enhanced.js",
         "modules/template-generator.js",
+        "modules/api-capture.js",
         "content.js"
       ],
       "css": ["content.css"]

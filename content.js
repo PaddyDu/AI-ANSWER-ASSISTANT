@@ -147,10 +147,17 @@
     }
 
     // 步骤2: 使用AI分析（无模板或模板失败时）
-    sendLog("info", "正在使用AI分析页面结构，请耐心等待...");
+    sendLog("info", "正在使用AI分析页面，请耐心等待...");
 
     try {
-      const aiResult = await analyzePageWithAI();
+      // 优先尝试用页面接口返回的 JSON（更干净、更快、对动态站点更准）
+      let aiResult = await analyzePageWithApiJson();
+      if (aiResult && aiResult.success) {
+        sendLog("info", "已捕获页面接口题目数据，基于接口数据分析...");
+      } else {
+        aiResult = await analyzePageWithAI();
+      }
+
       if (aiResult && aiResult.success) {
         aiDetectedSelectors = aiResult.selectors;
         const count = scanWithAISelectors(aiResult);
@@ -534,6 +541,152 @@
       payload: getSimplifiedHTML(),
       source: "fullHTML",
     };
+  }
+
+  // 列出页面上所有作答控件，并给每个打上唯一的 data-aiqid，便于 AI 用 selector 引用
+  function getDomControlInventory(maxControls = 400) {
+    const out = [];
+    const nodes = document.querySelectorAll(
+      'input[type="radio"], input[type="checkbox"], input[type="text"], input:not([type]), textarea'
+    );
+    let i = 0;
+    nodes.forEach((el) => {
+      if (i >= maxControls) return;
+      let type =
+        el.tagName === "TEXTAREA" ? "text" : (el.type || "text").toLowerCase();
+      if (type !== "radio" && type !== "checkbox" && type !== "text") return;
+      el.setAttribute("data-aiqid", String(i));
+      const label =
+        el.closest("label") ||
+        (el.id && document.querySelector(`label[for="${el.id}"]`)) ||
+        el.parentElement;
+      const text = label ? cleanText(label.textContent).substring(0, 60) : "";
+      out.push({
+        selector: `[data-aiqid="${i}"]`,
+        type,
+        name: el.name || "",
+        value: el.value || "",
+        text,
+      });
+      i++;
+    });
+    return out;
+  }
+
+  // 给一份 JSON 打分：找出“最像题库”的对象数组（元素多 + 含题目/选项类字段加权）
+  function scoreJsonPayload(json) {
+    const QKEY =
+      /question|stem|title|content|topic|subject|option|choice|answer|题|选项|答案|试题/i;
+    let best = 0;
+    function walk(node, depth) {
+      if (node == null || depth > 6) return;
+      if (Array.isArray(node)) {
+        const objs = node.filter(
+          (x) => x && typeof x === "object" && !Array.isArray(x)
+        );
+        if (objs.length >= 1) {
+          const keys = new Set();
+          objs.slice(0, 5).forEach((o) => Object.keys(o).forEach((k) => keys.add(k)));
+          const keyHit = [...keys].some((k) => QKEY.test(k));
+          best = Math.max(best, objs.length * (keyHit ? 3 : 1));
+        }
+        node.forEach((x) => walk(x, depth + 1));
+      } else if (typeof node === "object") {
+        Object.values(node).forEach((v) => walk(v, depth + 1));
+      }
+    }
+    walk(json, 0);
+    return best;
+  }
+
+  // 从捕获的接口响应里挑出最像题库的那一份
+  function pickQuestionPayload(responses) {
+    let best = null;
+    let bestScore = 0;
+    for (const r of responses) {
+      let json;
+      try {
+        json = JSON.parse(r.text);
+      } catch (e) {
+        continue;
+      }
+      const score = scoreJsonPayload(json);
+      if (score > bestScore) {
+        bestScore = score;
+        best = { url: r.url, text: r.text };
+      }
+    }
+    // 至少要有一个含题目类字段的数组才认为捕获到了题库
+    return bestScore >= 3 ? best : null;
+  }
+
+  // 基于页面接口 JSON + 控件清单做结构识别（拿不到接口数据则返回 null，回退整页 HTML）
+  async function analyzePageWithApiJson() {
+    if (!window.apiCapture) return null;
+
+    const responses = await window.apiCapture.getResponses();
+    if (!responses || responses.length === 0) return null;
+
+    const payload = pickQuestionPayload(responses);
+    if (!payload) return null;
+
+    const controls = getDomControlInventory();
+    if (controls.length === 0) return null;
+
+    let jsonText = payload.text;
+    if (jsonText.length > 20000) {
+      jsonText = jsonText.substring(0, 20000) + "...[已截断]";
+    }
+
+    const prompt = `请把“题目数据(JSON)”里的每道题、每个选项，对应到“控件清单”里的具体控件。
+
+返回JSON格式：
+{
+  "success": true,
+  "questions": [
+    {
+      "index": 0,
+      "type": "single",
+      "text": "完整题干",
+      "options": [{ "label": "A", "text": "选项内容", "selector": "控件清单里对应控件的 selector" }]
+    },
+    {
+      "index": 1,
+      "type": "fill",
+      "text": "填空题干",
+      "inputs": [{ "selector": "控件清单里 text 控件的 selector" }]
+    }
+  ]
+}
+
+要求：
+1. selector 必须原样照抄控件清单里的 selector 字段，不要自己编造
+2. text 取自题目数据，必须是完整题干
+3. 用选项的 value/文本/顺序做对应；对应不上的选项可省略
+4. 只返回JSON
+
+题目数据(JSON)：
+${jsonText}
+
+控件清单：
+${JSON.stringify(controls)}`;
+
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        { action: "analyzeJson", config, prompt },
+        (response) => {
+          if (chrome.runtime.lastError || !response || !response.success) {
+            resolve(null);
+            return;
+          }
+          try {
+            resolve(parseAIResponse(response.data));
+          } catch (e) {
+            resolve(null);
+          }
+        }
+      );
+    });
   }
 
   // 使用AI分析页面结构（只识别题目，不返回答案）

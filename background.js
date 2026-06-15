@@ -26,6 +26,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
+
+  if (request.action === 'analyzeJson') {
+    callAI(request.config, request.prompt, 'analyzeJson')
+      .then(response => sendResponse({ success: true, data: response }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
 });
 
 async function callAI(config, prompt, mode = 'answer') {
@@ -67,6 +74,23 @@ async function callAI(config, prompt, mode = 'answer') {
 2. 识别每道题的选项或输入框
 3. 为每个可交互元素（选项、输入框）生成精确的CSS选择器
 4. 不要分析答案，答案会在后续步骤单独获取
+
+只返回JSON格式，不要有其他内容。确保JSON格式正确。`,
+
+    analyzeJson: `你是一个题目结构对应助手。用户会给你两份数据：
+(1) 页面接口返回的题目数据(JSON)；
+(2) 页面上所有作答控件的清单，每个控件都带一个唯一的 selector 字段。
+
+你的任务：把题目数据里的每道题、每个选项，对应到控件清单里的具体控件，输出结构化结果。
+
+【重要】这一步只识别结构与对应关系，不需要给出答案！
+
+要点：
+1. type: single(单选)/multiple(多选)/fill(填空)
+2. text: 必须是完整题干，取自题目数据
+3. selector: 必须原样照抄“控件清单”里对应控件的 selector 字段，不要自己编造
+4. 用选项的 value、文本、出现顺序来做对应；填空题对应到 type 为 text 的控件
+5. 对应不上的选项可以省略
 
 只返回JSON格式，不要有其他内容。确保JSON格式正确。`
   };
