@@ -612,11 +612,16 @@
     return out;
   }
 
-  // 给一份 JSON 打分：找出“最像题库”的对象数组（元素多 + 含题目/选项类字段加权）
+  // 给一份 JSON 打分：找出“最像题库”的对象数组。
+  // 关键判别：真正的题目对象通常含一个“选项/子项”数组(长度>=2)，
+  // 而打分/反馈类列表只是扁平对象——以此把题库和评分接口区分开。
   function scoreJsonPayload(json) {
     const QKEY =
       /question|stem|title|content|topic|subject|option|choice|answer|题|选项|答案|试题/i;
     let best = 0;
+    function hasOptionArray(o) {
+      return Object.values(o).some((v) => Array.isArray(v) && v.length >= 2);
+    }
     function walk(node, depth) {
       if (node == null || depth > 6) return;
       if (Array.isArray(node)) {
@@ -627,7 +632,14 @@
           const keys = new Set();
           objs.slice(0, 5).forEach((o) => Object.keys(o).forEach((k) => keys.add(k)));
           const keyHit = [...keys].some((k) => QKEY.test(k));
-          best = Math.max(best, objs.length * (keyHit ? 3 : 1));
+          const sample = objs.slice(0, 8);
+          const optionish =
+            sample.filter(hasOptionArray).length >= Math.ceil(sample.length / 2);
+          // 含选项子数组的题库数组权重远高于扁平列表
+          best = Math.max(
+            best,
+            objs.length * (keyHit ? 3 : 1) * (optionish ? 4 : 1)
+          );
         }
         node.forEach((x) => walk(x, depth + 1));
       } else if (typeof node === "object") {
@@ -638,8 +650,12 @@
     return best;
   }
 
-  // 从捕获的接口响应里挑出最像题库的那一份
+  // 从捕获的接口响应里挑出最像题库的那一份（结构分 + URL 关键词偏置）
   function pickQuestionPayload(responses) {
+    const URL_POS = /exam|paper|quiz|question|survey|试卷|考试|问卷|答题|试题/i;
+    const URL_NEG =
+      /feedback|score|notification|device|heartbeat|unread|userinfo|track/i;
+
     let best = null;
     let bestScore = 0;
     for (const r of responses) {
@@ -649,13 +665,18 @@
       } catch (e) {
         continue;
       }
-      const score = scoreJsonPayload(json);
+      let score = scoreJsonPayload(json);
+      if (score <= 0) continue;
+
+      // URL 命中“题库类”词加权，命中“评分/反馈类”词降权（题库词优先）
+      if (URL_POS.test(r.url)) score *= 2;
+      else if (URL_NEG.test(r.url)) score *= 0.3;
+
       if (score > bestScore) {
         bestScore = score;
         best = { url: r.url, text: r.text };
       }
     }
-    // 至少要有一个含题目类字段的数组才认为捕获到了题库
     return bestScore >= 3 ? best : null;
   }
 
