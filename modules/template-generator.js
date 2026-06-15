@@ -149,28 +149,61 @@
     return common;
   }
 
-  // 推断 questionContainer：选一个命中数最接近题块数、且包含全部题块的选择器
+  function sameTag(containers) {
+    const tags = new Set(containers.map((c) => c.tagName.toLowerCase()));
+    return tags.size === 1 ? [...tags][0] : null;
+  }
+
+  // 选择器是否包含全部容器，且命中数不过分膨胀
+  function selectorCoversAll(sel, containers) {
+    const matched = safeQSA(sel);
+    if (matched.length === 0) return false;
+    if (!containers.every((c) => matched.includes(c))) return false;
+    if (matched.length > containers.length * 3 + 3) return false; // 太宽泛则拒绝
+    return true;
+  }
+
+  // 为某元素找一个稳定锚点选择器（向上找 id 或稳定 class，途中用 > tag 串联）
+  function anchorSelector(el, maxUp = 4) {
+    let cur = el;
+    const chain = [];
+    for (let i = 0; i < maxUp && cur && cur !== document.body; i++) {
+      if (cur.id) return ["#" + cssEsc(cur.id), ...chain].join(" > ");
+      const cls = stableClasses(cur);
+      if (cls.length) {
+        return [cur.tagName.toLowerCase() + "." + cssEsc(cls[0]), ...chain].join(
+          " > "
+        );
+      }
+      chain.unshift(cur.tagName.toLowerCase());
+      cur = cur.parentElement;
+    }
+    return null;
+  }
+
+  // 推断 questionContainer：公共 class → 公共 data-*/role 属性 → 结构(同 tag+同父) 逐级兜底
   function inferContainerSelector(containers) {
+    return (
+      inferByCommonClass(containers) ||
+      inferByCommonAttr(containers) ||
+      inferByStructure(containers)
+    );
+  }
+
+  function inferByCommonClass(containers) {
     const common = commonClasses(containers);
     const candidates = [];
     for (const c of common) candidates.push("." + cssEsc(c));
-
-    const tags = new Set(containers.map((c) => c.tagName.toLowerCase()));
-    if (tags.size === 1) {
-      const tag = [...tags][0];
-      for (const c of common) candidates.push(tag + "." + cssEsc(c));
-    }
+    const tag = sameTag(containers);
+    if (tag) for (const c of common) candidates.push(tag + "." + cssEsc(c));
 
     const target = containers.length;
     let best = null;
     let bestScore = Infinity;
-
     for (const sel of candidates) {
       const matched = safeQSA(sel);
       if (matched.length === 0) continue;
-      const containsAll = containers.every((c) => matched.includes(c));
-      if (!containsAll) continue;
-      // 越接近题块数越好；超出比缺失更可接受一点
+      if (!containers.every((c) => matched.includes(c))) continue;
       const diff = matched.length - target;
       const score = Math.abs(diff) + (diff > 0 ? diff * 0.1 : 1000);
       if (score < bestScore) {
@@ -179,6 +212,65 @@
       }
     }
     return best;
+  }
+
+  // 题块缺少共同 class 时，尝试共同的 data-*/role 属性
+  function inferByCommonAttr(containers) {
+    const attrSets = containers.map(
+      (c) =>
+        new Set(
+          Array.from(c.attributes || [])
+            .map((a) => a.name)
+            .filter(
+              (n) => (n.startsWith("data-") && n !== "data-aiqid") || n === "role"
+            )
+        )
+    );
+    let common = attrSets.length ? [...attrSets[0]] : [];
+    for (const s of attrSets.slice(1)) common = common.filter((a) => s.has(a));
+
+    const tag = sameTag(containers);
+    for (const attr of common) {
+      const cands = tag ? [`${tag}[${attr}]`, `[${attr}]`] : [`[${attr}]`];
+      for (const sel of cands) {
+        if (selectorCoversAll(sel, containers)) return sel;
+      }
+    }
+    return null;
+  }
+
+  // 结构兜底：题块同 tag 且是同一父元素的直接子节点 → 父锚点 > tag
+  function inferByStructure(containers) {
+    const tag = sameTag(containers);
+    if (!tag) return null;
+    const parents = new Set(containers.map((c) => c.parentElement));
+    if (parents.size !== 1) return null;
+    const parent = [...parents][0];
+    if (!parent) return null;
+    const psel = anchorSelector(parent);
+    if (!psel) return null;
+    const sel = `${psel} > ${tag}`;
+    return selectorCoversAll(sel, containers) ? sel : null;
+  }
+
+  // 用于诊断：描述一个容器元素的标签/id/class/属性
+  function describeEl(el) {
+    const cls = Array.from(el.classList || [])
+      .slice(0, 4)
+      .join(".");
+    const attrs = Array.from(el.attributes || [])
+      .map((a) => a.name)
+      .filter(
+        (n) => (n.startsWith("data-") && n !== "data-aiqid") || n === "role"
+      )
+      .slice(0, 3)
+      .join(",");
+    return (
+      el.tagName.toLowerCase() +
+      (el.id ? "#" + el.id : "") +
+      (cls ? "." + cls : "") +
+      (attrs ? "[" + attrs + "]" : "")
+    );
   }
 
   // 找到容器内承载题干文本的元素，返回公共 class 选择器
@@ -380,7 +472,11 @@
         entries.map((e) => e.container)
       );
       if (!containerSelector) {
-        return fail("无法推断出通用的题目容器选择器(题块缺少稳定的共同 class)");
+        const sample = entries
+          .slice(0, 3)
+          .map((e) => describeEl(e.container))
+          .join("  |  ");
+        return fail(`无法推断题目容器选择器；容器样例: ${sample}`);
       }
 
       const host = (() => {
