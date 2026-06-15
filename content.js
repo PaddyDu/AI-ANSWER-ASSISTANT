@@ -8,6 +8,8 @@
   let answeredCount = 0;
   let isRunning = false;
   let config = null;
+  // 本次页面是否已因“疑似新题型”触发过一次 AI 补全（避免反复触发）
+  let coverageAiAttempted = false;
 
   // Question selectors for common exam platforms
   const QUESTION_SELECTORS = [
@@ -107,13 +109,11 @@
         const result = scanner.scanWithTemplate(template);
 
         if (result.success && result.count > 0) {
-          // 覆盖度检查：页面疑似题块明显多于模板扫到的，可能存在新题型
-          const estimate = estimateQuestionBlocks();
-          const incomplete =
-            estimate >= result.count + 2 && estimate >= result.count * 1.25;
+          // 题型覆盖检查：页面是否存在该模板未定义的题型（廉价，最多 3 次 querySelector）
+          const newType = pageHasUncoveredType(template);
 
-          if (!incomplete) {
-            // 模板扫描成功且覆盖完整
+          if (!newType || coverageAiAttempted) {
+            // 模板覆盖完整，或本页已尝试过一次 AI 补全（避免重复扫描时反复触发）
             questions = result.questions;
             answeredCount = 0;
             updateStats();
@@ -127,10 +127,11 @@
             return;
           }
 
-          // 疑似漏题 → 落入下方 AI 分析，成功后把新题型合并进模板
+          // 发现模板未覆盖的题型 → 落入下方 AI 分析，成功后把新题型合并进模板
+          coverageAiAttempted = true;
           sendLog(
             "warning",
-            `模板扫到 ${result.count} 题，但页面疑似有 ${estimate} 题，可能有新题型，改用AI补全...`
+            `检测到模板未覆盖的题型，改用AI分析并尝试更新模板...`
           );
         } else {
           // 模板扫描失败，回退到AI分析
@@ -684,22 +685,33 @@ ${payload}`;
     return questions.length;
   }
 
-  // 估算页面上的题块数量（用于判断模板是否漏题/有新题型）
-  function estimateQuestionBlocks() {
-    const set = new Set();
-    document
-      .querySelectorAll('input[type="radio"], input[type="checkbox"]')
-      .forEach((inp) => {
-        const c = findQuestionContainer(inp.closest("label") || inp);
-        if (c) set.add(c);
-      });
-    document
-      .querySelectorAll('input[type="text"], input:not([type]), textarea')
-      .forEach((inp) => {
-        const c = findQuestionContainer(inp.closest("label") || inp);
-        if (c) set.add(c);
-      });
-    return set.size;
+  // 页面是否存在当前模板未定义的题型（用于发现“有模板但有新题型”的情况）。
+  // 只看页面上出现了哪些 input 类型，与模板已声明的题型对比，开销极小。
+  function pageHasUncoveredType(template) {
+    const qt =
+      template && template.selectors && template.selectors.questionTypes;
+    if (!qt) return false;
+
+    const known = new Set(
+      Object.keys(qt).filter(
+        (k) =>
+          k !== "detectByAttribute" &&
+          k !== "detectByInput" &&
+          k !== "detectByClass"
+      )
+    );
+
+    const pageTypes = [];
+    if (document.querySelector('input[type="radio"]')) pageTypes.push("single");
+    if (document.querySelector('input[type="checkbox"]'))
+      pageTypes.push("multiple");
+    if (
+      document.querySelector('input[type="text"], input:not([type]), textarea')
+    ) {
+      pageTypes.push("fill");
+    }
+
+    return pageTypes.some((t) => !known.has(t));
   }
 
   // 根据本次 AI 识别结果自动生成或更新站点模板（验证通过才保存）
@@ -713,7 +725,8 @@ ${payload}`;
         window.location.href
       );
       if (!candidate) {
-        sendLog("info", "未能自动生成站点模板（页面结构无法泛化）");
+        // 要么页面结构无法泛化，要么已有模板无需补充新题型
+        sendLog("info", "未生成/更新站点模板（无新题型或结构无法泛化）");
         return;
       }
 

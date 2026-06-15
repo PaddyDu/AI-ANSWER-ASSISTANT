@@ -247,7 +247,8 @@
               optionText = optionText.substring(match[0].length).trim();
             }
           } catch (e) {}
-        } else {
+        } else if (typeSelectors.optionLabelPattern === undefined && optionText) {
+          // 模板显式设为 null 表示不要剥前缀（如腾讯问卷）；仅在未设置时做通用剥离
           const match = optionText.match(/^([A-Z])[\.\、\s]/);
           if (match) {
             optionLabel = match[1];

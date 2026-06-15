@@ -136,6 +136,12 @@
         await chrome.storage.sync.set({ [this.STORAGE_KEY]: templates });
         window.siteMatcher.removeTemplate(siteId);
 
+        // 若删除的是内置模板的覆盖层，需重新注册内置模板，使其立即恢复生效
+        const builtIn = this.builtInTemplates.find((t) => t.siteId === siteId);
+        if (builtIn) {
+          window.siteMatcher.registerTemplate(builtIn);
+        }
+
         console.log(`[TemplateManager] 模板已删除: ${siteId}`);
         return true;
       } catch (error) {

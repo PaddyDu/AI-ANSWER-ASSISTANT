@@ -18,9 +18,13 @@
     return VOLATILE.some((v) => l.includes(v));
   }
 
-  // 形如 CSS Modules 哈希 / 随机串的 class，跨页面会变，跳过
+  // 形如 CSS Modules 哈希 / 随机串的 class，跨页面会变，跳过。
+  // 要求 6+ 位十六进制串里至少含一个数字，避免误杀 feedback/decade 等正常语义 class。
   function looksHashed(c) {
-    return /[a-f0-9]{6,}/i.test(c) || /__[A-Za-z0-9]{5,}/.test(c);
+    return (
+      (/[a-f0-9]{6,}/i.test(c) && /[0-9]/.test(c)) ||
+      /__[A-Za-z0-9]{5,}/.test(c)
+    );
   }
 
   function cssEsc(s) {
@@ -344,6 +348,7 @@
       template = deepClone(existingTemplate);
       template.selectors = template.selectors || {};
       template.selectors.questionTypes = template.selectors.questionTypes || {};
+      let addedType = false;
       for (const [type, te] of Object.entries(typesPresent)) {
         if (!template.selectors.questionTypes[type]) {
           template.selectors.questionTypes[type] = buildTypeConfig(
@@ -351,8 +356,11 @@
             te,
             existingTemplate
           );
+          addedType = true;
         }
       }
+      // 没有新题型可补充：不要重复保存（否则会用一份相同副本遮蔽内置模板）
+      if (!addedType) return null;
     } else {
       // 新建：detectByInput 模式的全新模板
       const containerSelector = inferContainerSelector(
