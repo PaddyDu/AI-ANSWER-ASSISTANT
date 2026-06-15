@@ -904,11 +904,11 @@ ${payload}`;
   }
 
   // 页面是否存在当前模板未定义的题型（用于发现“有模板但有新题型”的情况）。
-  // 只看页面上出现了哪些 input 类型，与模板已声明的题型对比，开销极小。
+  // 只统计“题目容器内部”的 input 类型，避免把搜索框/登录框等非题目输入误判为新题型。
   function pageHasUncoveredType(template) {
-    const qt =
-      template && template.selectors && template.selectors.questionTypes;
-    if (!qt) return false;
+    const sel = template && template.selectors;
+    const qt = sel && sel.questionTypes;
+    if (!qt || !sel.questionContainer) return false;
 
     const known = new Set(
       Object.keys(qt).filter(
@@ -919,17 +919,28 @@ ${payload}`;
       )
     );
 
-    const pageTypes = [];
-    if (document.querySelector('input[type="radio"]')) pageTypes.push("single");
-    if (document.querySelector('input[type="checkbox"]'))
-      pageTypes.push("multiple");
-    if (
-      document.querySelector('input[type="text"], input:not([type]), textarea')
-    ) {
-      pageTypes.push("fill");
+    let containers = [];
+    try {
+      containers = Array.from(
+        document.querySelectorAll(sel.questionContainer)
+      );
+    } catch (e) {
+      return false;
     }
+    if (containers.length === 0) return false;
 
-    return pageTypes.some((t) => !known.has(t));
+    const pageTypes = new Set();
+    containers.forEach((c) => {
+      if (c.querySelector('input[type="radio"]')) pageTypes.add("single");
+      if (c.querySelector('input[type="checkbox"]')) pageTypes.add("multiple");
+      if (
+        c.querySelector('input[type="text"], input:not([type]), textarea')
+      ) {
+        pageTypes.add("fill");
+      }
+    });
+
+    return [...pageTypes].some((t) => !known.has(t));
   }
 
   // 根据本次 AI 识别结果自动生成或更新站点模板（验证通过才保存）
