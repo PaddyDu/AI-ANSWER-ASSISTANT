@@ -39,15 +39,8 @@ const clearLogBtn = document.getElementById("clearLog");
 let isRunning = false;
 let hasScanned = false;
 
-// Built-in default model
-const BUILTIN_MODEL = {
-  id: "builtin-default",
-  name: "默认",
-  baseUrl: "https://d.yikfun.de5.net/",
-  apiKey: "default",
-  model: "Doubao-1.5-pro",
-  builtin: true,
-};
+// 不内置任何默认模型：插件只会与用户自行配置的模型通信，
+// 不向任何第三方服务器发送数据。
 
 // Initialize
 document.addEventListener("DOMContentLoaded", async () => {
@@ -151,30 +144,26 @@ async function initModels() {
       activeModelId: customModel.id,
     });
   } else if (!data.aiModels) {
-    // First time, set builtin as active
-    await chrome.storage.sync.set({
-      aiModels: [],
-      activeModelId: BUILTIN_MODEL.id,
-    });
+    // 首次使用：不内置默认模型，需用户自行配置
+    await chrome.storage.sync.set({ aiModels: [] });
   }
 }
 
 async function getAllModels() {
   const data = await chrome.storage.sync.get(["aiModels"]);
-  return [BUILTIN_MODEL, ...(data.aiModels || [])];
+  return data.aiModels || [];
 }
 
 async function getActiveModel() {
   const data = await chrome.storage.sync.get(["activeModelId"]);
   const models = await getAllModels();
-  const activeId = data.activeModelId || BUILTIN_MODEL.id;
-  return models.find((m) => m.id === activeId) || BUILTIN_MODEL;
+  return models.find((m) => m.id === data.activeModelId) || models[0] || null;
 }
 
 async function renderModelList() {
   const models = await getAllModels();
   const data = await chrome.storage.sync.get(["activeModelId"]);
-  const activeId = data.activeModelId || BUILTIN_MODEL.id;
+  const activeId = data.activeModelId || (models[0] && models[0].id);
 
   modelList.innerHTML = models
     .map(
@@ -261,7 +250,7 @@ async function renderModelList() {
 
       const updates = { aiModels: models };
       if (data.activeModelId === modelId) {
-        updates.activeModelId = BUILTIN_MODEL.id;
+        updates.activeModelId = models[0] ? models[0].id : null;
       }
 
       await chrome.storage.sync.set(updates);
@@ -410,6 +399,11 @@ async function injectContentScript(tabId) {
 // 1. Scan
 scanBtn.addEventListener("click", async () => {
   const activeModel = await getActiveModel();
+  if (!activeModel) {
+    addLog("error", "请先在设置中配置 AI 模型");
+    openModal();
+    return;
+  }
   const config = {
     baseUrl: activeModel.baseUrl,
     apiKey: activeModel.apiKey,
@@ -514,6 +508,11 @@ startBtn.addEventListener("click", async () => {
 
     // Start
     const activeModel = await getActiveModel();
+    if (!activeModel) {
+      addLog("error", "请先在设置中配置 AI 模型");
+      openModal();
+      return;
+    }
     const config = {
       baseUrl: activeModel.baseUrl,
       apiKey: activeModel.apiKey,

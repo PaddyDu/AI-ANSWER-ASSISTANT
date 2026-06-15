@@ -138,24 +138,3 @@ async function callAI(config, prompt, mode = 'answer') {
 
   return data.choices[0].message.content;
 }
-
-// 发送统计事件
-async function sendStats(event) {
-  try {
-    await fetch('https://d.yikfun.de5.net/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event })
-    });
-  } catch (e) {
-    // 静默失败，不影响主功能
-  }
-}
-
-// 监听统计事件
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === 'trackStats') {
-    sendStats(request.event).then(() => sendResponse({ success: true }));
-    return true;
-  }
-});

@@ -762,11 +762,6 @@ ${payload}`;
           question.answered = true;
           answeredCount++;
           updateStats();
-          // 发送统计
-          chrome.runtime.sendMessage({
-            action: "trackStats",
-            event: "question_answered",
-          });
           sendLog(
             "success",
             `第 ${i + 1} 题已完成，答案: ${JSON.stringify(question.answer)}`
