@@ -300,6 +300,13 @@
     return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
+  // 记录最近一次未能生成模板的原因，便于在面板里诊断
+  let lastReason = "";
+  function fail(reason) {
+    lastReason = reason;
+    return null;
+  }
+
   /**
    * 从 AI 识别出的题目（含已解析 DOM 元素）生成或更新站点模板。
    * @param {Array} questions 经 scanWithAISelectors 解析、带 element 的题目数组
@@ -308,13 +315,17 @@
    * @returns {Object|null} 候选模板对象，或 null（无法生成）
    */
   function generateFromAIResult(questions, existingTemplate, url) {
-    if (!Array.isArray(questions) || questions.length === 0) return null;
+    if (!Array.isArray(questions) || questions.length === 0) {
+      return fail("无题目数据");
+    }
 
     // 收集每道题的元素
     const perQ = questions
       .map((q) => ({ q, els: questionElements(q) }))
       .filter((x) => x.els.length);
-    if (perQ.length === 0) return null;
+    if (perQ.length === 0) {
+      return fail("题目元素均未解析到(AI返回的选择器在页面上没命中)");
+    }
 
     // 解析每道题的容器（多题用隔离式定位，单题回退到结构启发式）
     const entries = [];
@@ -332,7 +343,7 @@
       }
       if (container) entries.push({ q, el: els[0], container });
     }
-    if (entries.length === 0) return null;
+    if (entries.length === 0) return fail("未能定位到任何题目容器");
 
     // 按题型分组并生成配置
     const typesPresent = {};
@@ -340,7 +351,9 @@
       const te = entries.filter((e) => e.q.type === type);
       if (te.length) typesPresent[type] = te;
     }
-    if (Object.keys(typesPresent).length === 0) return null;
+    if (Object.keys(typesPresent).length === 0) {
+      return fail("题型为空");
+    }
 
     let template;
     if (existingTemplate) {
@@ -360,13 +373,15 @@
         }
       }
       // 没有新题型可补充：不要重复保存（否则会用一份相同副本遮蔽内置模板）
-      if (!addedType) return null;
+      if (!addedType) return fail("已有模板，且无新题型需要补充");
     } else {
       // 新建：detectByInput 模式的全新模板
       const containerSelector = inferContainerSelector(
         entries.map((e) => e.container)
       );
-      if (!containerSelector) return null;
+      if (!containerSelector) {
+        return fail("无法推断出通用的题目容器选择器(题块缺少稳定的共同 class)");
+      }
 
       const host = (() => {
         try {
@@ -375,7 +390,7 @@
           return "";
         }
       })();
-      if (!host) return null;
+      if (!host) return fail("无法解析域名");
 
       const questionTypes = { detectByInput: true };
       for (const [type, te] of Object.entries(typesPresent)) {
@@ -401,7 +416,10 @@
     return template;
   }
 
-  window.TemplateGenerator = { generateFromAIResult };
+  window.TemplateGenerator = {
+    generateFromAIResult,
+    getLastReason: () => lastReason,
+  };
 
   console.log("[TemplateGenerator] 模块已加载");
 })();

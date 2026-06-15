@@ -914,7 +914,10 @@ ${payload}`;
   // 根据本次 AI 识别结果自动生成或更新站点模板（验证通过才保存）
   async function maybeGenerateTemplate(matchedTemplate) {
     try {
-      if (!window.TemplateGenerator || !window.EnhancedScanner) return;
+      if (!window.TemplateGenerator || !window.EnhancedScanner) {
+        sendLog("warning", "[模板] 生成模块未加载，无法沉淀模板");
+        return;
+      }
 
       const candidate = window.TemplateGenerator.generateFromAIResult(
         questions,
@@ -922,10 +925,19 @@ ${payload}`;
         window.location.href
       );
       if (!candidate) {
-        // 要么页面结构无法泛化，要么已有模板无需补充新题型
-        sendLog("info", "未生成/更新站点模板（无新题型或结构无法泛化）");
+        const reason = window.TemplateGenerator.getLastReason
+          ? window.TemplateGenerator.getLastReason()
+          : "";
+        sendLog("info", `[模板] 未沉淀：${reason || "结构无法泛化"}`);
         return;
       }
+
+      sendLog(
+        "info",
+        `[模板] 已生成候选(容器: ${
+          candidate.selectors.questionContainer || "继承自原模板"
+        })，回放验证中...`
+      );
 
       // 回放验证：用候选模板重扫一遍，题数需与 AI 结果基本一致
       const replay = new window.EnhancedScanner().scanWithTemplate(candidate);
@@ -938,7 +950,10 @@ ${payload}`;
       if (!ok) {
         sendLog(
           "warning",
-          `自动模板验证未通过（模板扫到 ${replay.count}/${aiCount} 题），本次仅用AI结果答题`
+          `[模板] 验证未通过：回放扫到 ${replay.count}/${aiCount} 题(需在 ${Math.max(
+            1,
+            Math.floor(aiCount * 0.8)
+          )}~${Math.floor(aiCount * 1.5)} 之间)，本次仅用AI结果答题`
         );
         return;
       }
@@ -947,10 +962,10 @@ ${payload}`;
       const action = matchedTemplate ? "更新" : "生成";
       sendLog(
         "success",
-        `已自动${action}站点模板：${candidate.siteName}（下次同站点可秒级扫描）`
+        `[模板] 已自动${action}并保存：${candidate.siteId}（下次同站点可秒级扫描）`
       );
     } catch (e) {
-      sendLog("warning", `自动生成模板出错：${e.message}`);
+      sendLog("warning", `[模板] 沉淀出错：${e.message}`);
     }
   }
 
