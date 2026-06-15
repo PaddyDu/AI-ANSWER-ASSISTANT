@@ -55,40 +55,55 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // 创建模板卡片
+  // 注意：模板字段（siteName/description/urlPatterns 等）可能来自导入的不可信
+  // 模板，必须用 textContent 写入，避免在特权扩展页面中触发 DOM XSS。
   function createTemplateCard(template) {
     const card = document.createElement("div");
     card.className = "template-card";
 
-    card.innerHTML = `
-      <div class="template-header">
-        <div class="template-info">
-          <h3 class="template-name">
-            ${template.siteName}
-            <span class="template-badge">内置</span>
-          </h3>
-          <div class="template-meta">
-            <span>版本: ${template.version}</span>
-            <span>更新: ${template.lastUpdated}</span>
-          </div>
-        </div>
-      </div>
+    const header = document.createElement("div");
+    header.className = "template-header";
+    const info = document.createElement("div");
+    info.className = "template-info";
 
-      ${
-        template.description
-          ? `<p class="template-description">${template.description}</p>`
-          : ""
-      }
+    const name = document.createElement("h3");
+    name.className = "template-name";
+    name.textContent = (template.siteName || "") + " ";
+    const badge = document.createElement("span");
+    badge.className = "template-badge";
+    badge.textContent = "内置";
+    name.appendChild(badge);
 
-      <div class="template-urls">
-        ${
-          template.urlPatterns
-            ? template.urlPatterns
-                .map((url) => `<span class="url-tag">${url}</span>`)
-                .join("")
-            : ""
-        }
-      </div>
-    `;
+    const meta = document.createElement("div");
+    meta.className = "template-meta";
+    const versionEl = document.createElement("span");
+    versionEl.textContent = `版本: ${template.version || ""}`;
+    const updatedEl = document.createElement("span");
+    updatedEl.textContent = `更新: ${template.lastUpdated || ""}`;
+    meta.append(versionEl, updatedEl);
+
+    info.append(name, meta);
+    header.appendChild(info);
+    card.appendChild(header);
+
+    if (template.description) {
+      const desc = document.createElement("p");
+      desc.className = "template-description";
+      desc.textContent = template.description;
+      card.appendChild(desc);
+    }
+
+    const urls = document.createElement("div");
+    urls.className = "template-urls";
+    if (Array.isArray(template.urlPatterns)) {
+      template.urlPatterns.forEach((url) => {
+        const tag = document.createElement("span");
+        tag.className = "url-tag";
+        tag.textContent = url;
+        urls.appendChild(tag);
+      });
+    }
+    card.appendChild(urls);
 
     return card;
   }

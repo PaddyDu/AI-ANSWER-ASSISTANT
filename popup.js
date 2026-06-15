@@ -572,10 +572,18 @@ function addLog(type, message) {
   });
   const logItem = document.createElement("div");
   logItem.className = `log-item log-${type}`;
-  logItem.innerHTML = `
-    <span class="log-time">${time}</span>
-    <span class="log-msg">${message}</span>
-  `;
+
+  // 使用 textContent 而非 innerHTML，避免来自页面/AI 的不可信日志文本
+  // 在特权侧边栏上下文中触发 DOM XSS
+  const timeEl = document.createElement("span");
+  timeEl.className = "log-time";
+  timeEl.textContent = time;
+
+  const msgEl = document.createElement("span");
+  msgEl.className = "log-msg";
+  msgEl.textContent = message;
+
+  logItem.append(timeEl, msgEl);
   logContent.appendChild(logItem);
   logContent.scrollTop = logContent.scrollHeight;
 }
