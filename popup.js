@@ -113,6 +113,82 @@ openTemplatesBtn.addEventListener("click", () => {
   window.location.href = "template-manager.html";
 });
 
+// --- API 捕获诊断 ---
+const apiDebugBtn = document.getElementById("apiDebugBtn");
+
+function shortenUrl(url) {
+  if (!url) return "(无URL)";
+  try {
+    const u = new URL(url);
+    let s = u.pathname + u.search;
+    if (s.length > 48) s = s.substring(0, 48) + "…";
+    return u.hostname + s;
+  } catch (e) {
+    return url.length > 60 ? url.substring(0, 60) + "…" : url;
+  }
+}
+
+apiDebugBtn.addEventListener("click", async () => {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tabs[0]) {
+    addLog("error", "无法获取当前标签页");
+    return;
+  }
+  const tab = tabs[0];
+
+  if (
+    !tab.url ||
+    tab.url.startsWith("chrome://") ||
+    tab.url.startsWith("chrome-extension://") ||
+    tab.url.startsWith("edge://") ||
+    tab.url.startsWith("about:")
+  ) {
+    addLog("error", "请切换到普通网页再诊断");
+    return;
+  }
+
+  const injected = await ensureContentScriptInjected(tab.id);
+  if (!injected) {
+    addLog("error", "无法连接到页面，请刷新后重试");
+    return;
+  }
+
+  addLog("info", "正在检查接口捕获情况...");
+  chrome.tabs.sendMessage(tab.id, { action: "apiDebug" }, (resp) => {
+    if (chrome.runtime.lastError || !resp || !resp.success) {
+      addLog("error", "接口捕获检查失败，刷新页面后重试");
+      return;
+    }
+
+    if (!resp.captured || resp.captured.length === 0) {
+      addLog(
+        "warning",
+        "未捕获到任何接口响应：站点可能未用 fetch/XHR，或请求在钩子安装前已发出，可刷新页面后重试"
+      );
+      return;
+    }
+
+    addLog(
+      "info",
+      `捕获 ${resp.captured.length} 个接口响应，作答控件 ${resp.controlCount} 个：`
+    );
+    resp.captured.slice(0, 8).forEach((c) => {
+      const isPicked = c.url === resp.pickedUrl;
+      const tag = isPicked ? "★选中题库" : c.score > 0 ? "疑似" : "非题库";
+      addLog(
+        isPicked ? "success" : "info",
+        `${tag} 评分${c.score} · ${shortenUrl(c.url)} (${c.size}B)`
+      );
+    });
+    if (!resp.pickedUrl) {
+      addLog(
+        "warning",
+        "没有评分足够高的题库接口，扫描会回退到整页 HTML 分析"
+      );
+    }
+  });
+});
+
 // --- Model Management Logic ---
 toggleEditApiKeyBtn.addEventListener("click", () => {
   const type = editApiKeyInput.type === "password" ? "text" : "password";

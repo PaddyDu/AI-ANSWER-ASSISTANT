@@ -85,9 +85,48 @@
           isRunning,
         });
         break;
+      case "apiDebug":
+        handleApiDebug(sendResponse);
+        return true; // 异步响应
     }
     return true;
   });
+
+  // 诊断：报告捕获到的接口响应、各自评分、选中项、作答控件数
+  async function handleApiDebug(sendResponse) {
+    try {
+      const responses = window.apiCapture
+        ? await window.apiCapture.getResponses()
+        : [];
+
+      const scored = (responses || [])
+        .map((r) => {
+          let score = 0;
+          let parseOk = true;
+          try {
+            score = scoreJsonPayload(JSON.parse(r.text));
+          } catch (e) {
+            parseOk = false;
+          }
+          return { url: r.url, size: r.text.length, score, parseOk };
+        })
+        .sort((a, b) => b.score - a.score);
+
+      const picked = pickQuestionPayload(responses || []);
+      const controlCount = document.querySelectorAll(
+        'input[type="radio"], input[type="checkbox"], input[type="text"], input:not([type]), textarea'
+      ).length;
+
+      sendResponse({
+        success: true,
+        captured: scored,
+        pickedUrl: picked ? picked.url : null,
+        controlCount,
+      });
+    } catch (e) {
+      sendResponse({ success: false, error: e.message });
+    }
+  }
 
   // 处理扫描请求
   async function handleScan(sendResponse) {
@@ -632,6 +671,11 @@
 
     const controls = getDomControlInventory();
     if (controls.length === 0) return null;
+
+    sendLog(
+      "info",
+      `已捕获 ${responses.length} 个接口响应，选中疑似题库接口，作答控件 ${controls.length} 个`
+    );
 
     let jsonText = payload.text;
     if (jsonText.length > 20000) {
