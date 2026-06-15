@@ -107,18 +107,31 @@
         const result = scanner.scanWithTemplate(template);
 
         if (result.success && result.count > 0) {
-          // 模板扫描成功
-          questions = result.questions;
-          answeredCount = 0;
-          updateStats();
+          // 覆盖度检查：页面疑似题块明显多于模板扫到的，可能存在新题型
+          const estimate = estimateQuestionBlocks();
+          const incomplete =
+            estimate >= result.count + 2 && estimate >= result.count * 1.25;
 
-          sendLog("success", `使用模板扫描成功，发现 ${result.count} 道题目`);
+          if (!incomplete) {
+            // 模板扫描成功且覆盖完整
+            questions = result.questions;
+            answeredCount = 0;
+            updateStats();
 
-          // 更新模板统计
-          await window.templateManager.updateStats(template.siteId, "success");
+            sendLog("success", `使用模板扫描成功，发现 ${result.count} 道题目`);
 
-          sendResponse({ success: true, count: result.count, message: "" });
-          return;
+            // 更新模板统计
+            await window.templateManager.updateStats(template.siteId, "success");
+
+            sendResponse({ success: true, count: result.count, message: "" });
+            return;
+          }
+
+          // 疑似漏题 → 落入下方 AI 分析，成功后把新题型合并进模板
+          sendLog(
+            "warning",
+            `模板扫到 ${result.count} 题，但页面疑似有 ${estimate} 题，可能有新题型，改用AI补全...`
+          );
         } else {
           // 模板扫描失败，回退到AI分析
           sendLog("warning", `模板扫描失败，回退到AI分析...`);
@@ -142,6 +155,8 @@
         const count = scanWithAISelectors(aiResult);
         if (count > 0) {
           sendLog("success", `AI分析成功，发现 ${count} 道题目`);
+          // 根据本次 AI 结果自动生成/更新站点模板（域名级）
+          await maybeGenerateTemplate(template);
           sendResponse({ success: true, count, message: "" });
         } else {
           sendLog("warning", "AI分析完成，但未能定位到题目元素");
@@ -667,6 +682,66 @@ ${payload}`;
 
     updateStats();
     return questions.length;
+  }
+
+  // 估算页面上的题块数量（用于判断模板是否漏题/有新题型）
+  function estimateQuestionBlocks() {
+    const set = new Set();
+    document
+      .querySelectorAll('input[type="radio"], input[type="checkbox"]')
+      .forEach((inp) => {
+        const c = findQuestionContainer(inp.closest("label") || inp);
+        if (c) set.add(c);
+      });
+    document
+      .querySelectorAll('input[type="text"], input:not([type]), textarea')
+      .forEach((inp) => {
+        const c = findQuestionContainer(inp.closest("label") || inp);
+        if (c) set.add(c);
+      });
+    return set.size;
+  }
+
+  // 根据本次 AI 识别结果自动生成或更新站点模板（验证通过才保存）
+  async function maybeGenerateTemplate(matchedTemplate) {
+    try {
+      if (!window.TemplateGenerator || !window.EnhancedScanner) return;
+
+      const candidate = window.TemplateGenerator.generateFromAIResult(
+        questions,
+        matchedTemplate || null,
+        window.location.href
+      );
+      if (!candidate) {
+        sendLog("info", "未能自动生成站点模板（页面结构无法泛化）");
+        return;
+      }
+
+      // 回放验证：用候选模板重扫一遍，题数需与 AI 结果基本一致
+      const replay = new window.EnhancedScanner().scanWithTemplate(candidate);
+      const aiCount = questions.length;
+      const ok =
+        replay.success &&
+        replay.count >= Math.max(1, Math.floor(aiCount * 0.8)) &&
+        replay.count <= aiCount * 1.5;
+
+      if (!ok) {
+        sendLog(
+          "warning",
+          `自动模板验证未通过（模板扫到 ${replay.count}/${aiCount} 题），本次仅用AI结果答题`
+        );
+        return;
+      }
+
+      await window.templateManager.saveTemplate(candidate);
+      const action = matchedTemplate ? "更新" : "生成";
+      sendLog(
+        "success",
+        `已自动${action}站点模板：${candidate.siteName}（下次同站点可秒级扫描）`
+      );
+    } catch (e) {
+      sendLog("warning", `自动生成模板出错：${e.message}`);
+    }
   }
 
   // 安全的querySelector，捕获无效选择器错误

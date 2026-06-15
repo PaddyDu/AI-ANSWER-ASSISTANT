@@ -382,6 +382,7 @@ async function injectContentScript(tabId) {
         "modules/site-matcher.js",
         "modules/template-manager.js",
         "modules/scanner-enhanced.js",
+        "modules/template-generator.js",
         "content.js",
       ],
     });

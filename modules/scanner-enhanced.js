@@ -79,14 +79,16 @@
       let questionType = null;
       let typeSelectors = null;
 
-      if (selectors.questionTypes.detectByAttribute) {
+      if (questionTypes.detectByInput) {
+        // 按题块内的 input 判断题型（自动生成的模板使用此模式）
+        questionType = this._detectTypeByInput(element);
+        if (questionType) typeSelectors = questionTypes[questionType] || {};
+      } else if (questionTypes.detectByAttribute) {
         // 通过属性判断类型
-        const attrName = selectors.questionTypes.detectByAttribute;
+        const attrName = questionTypes.detectByAttribute;
         const typeValue = element.getAttribute(attrName);
-
-        // 查找匹配的类型
         for (const [type, config] of Object.entries(questionTypes)) {
-          if (type === "detectByAttribute") continue;
+          if (type === "detectByAttribute" || type === "detectByInput") continue;
           if (config.typeValue === typeValue) {
             questionType = type;
             typeSelectors = config;
@@ -96,8 +98,8 @@
       } else {
         // 通过选择器判断类型
         for (const [type, config] of Object.entries(questionTypes)) {
-          if (type === "detectByAttribute") continue;
-          if (element.matches(config.container)) {
+          if (type === "detectByAttribute" || type === "detectByInput") continue;
+          if (config.container && element.matches(config.container)) {
             questionType = type;
             typeSelectors = config;
             break;
@@ -109,6 +111,7 @@
         console.warn("[EnhancedScanner] 无法确定题目类型:", element);
         return null;
       }
+      typeSelectors = typeSelectors || {};
 
       // 构建题目对象
       const question = {
@@ -121,11 +124,17 @@
         element: element,
       };
 
-      // 提取题目文本
-      const titleElement = element.querySelector(typeSelectors.title);
-      if (titleElement) {
-        question.text = this._cleanText(titleElement.textContent);
+      // 提取题目文本（学到的 title 选择器失配时兜底用容器文本）
+      let titleElement = null;
+      if (typeSelectors.title) {
+        try {
+          titleElement = element.querySelector(typeSelectors.title);
+        } catch (e) {}
       }
+      const titleText = titleElement
+        ? this._cleanText(titleElement.textContent)
+        : "";
+      question.text = titleText || this._extractTitleFallback(element);
 
       // 根据类型提取选项或输入框
       if (questionType === "single" || questionType === "multiple") {
@@ -143,44 +152,113 @@
     }
 
     /**
-     * 解析选项
+     * 按题块内的 input 判断题型（detectByInput 模式）
+     * @private
+     */
+    _detectTypeByInput(element) {
+      if (element.querySelector('input[type="radio"]')) return "single";
+      if (element.querySelector('input[type="checkbox"]')) return "multiple";
+      if (
+        element.querySelector(
+          'input[type="text"], input:not([type]), textarea'
+        )
+      ) {
+        return "fill";
+      }
+      return null;
+    }
+
+    /**
+     * 题干文本兜底：模板未提供 title 或失配时，从容器里挑一段合理文本
+     * @private
+     */
+    _extractTitleFallback(element) {
+      const cand = element.querySelectorAll(
+        "p, span, div, h1, h2, h3, h4, h5, label"
+      );
+      for (const el of cand) {
+        if (el.querySelector("input, textarea")) continue;
+        const t = this._cleanText(el.textContent);
+        if (t.length > 6 && !/^[A-Da-d][\.\、\s]/.test(t)) return t;
+      }
+      return this._cleanText(element.textContent);
+    }
+
+    /**
+     * 解析选项（学到的 optionItem/optionLabel 失配时回退到通用解析）
      * @private
      */
     _parseOptions(container, typeSelectors, template) {
-      const options = [];
-      const optionElements = container.querySelectorAll(
-        typeSelectors.optionItem
-      );
+      const inputSel =
+        typeSelectors.optionInput ||
+        'input[type="radio"], input[type="checkbox"]';
 
+      // 先按 optionItem 行解析
+      let optionElements = [];
+      if (typeSelectors.optionItem) {
+        try {
+          optionElements = Array.from(
+            container.querySelectorAll(typeSelectors.optionItem)
+          ).filter((el) => {
+            try {
+              return el.querySelector(inputSel);
+            } catch (e) {
+              return false;
+            }
+          });
+        } catch (e) {
+          optionElements = [];
+        }
+      }
+
+      // 兜底：拿不到选项行 → 直接用容器内的 input
+      if (optionElements.length === 0) {
+        let inputs = [];
+        try {
+          inputs = Array.from(container.querySelectorAll(inputSel));
+        } catch (e) {}
+        return this._parseOptionsFromInputs(container, inputs, template);
+      }
+
+      const options = [];
       optionElements.forEach((optionEl, idx) => {
-        // 查找input元素
-        const input = optionEl.querySelector(typeSelectors.optionInput);
+        let input = null;
+        try {
+          input = optionEl.querySelector(inputSel);
+        } catch (e) {}
         if (!input) return;
 
-        // 查找label文本
-        const labelEl = optionEl.querySelector(typeSelectors.optionLabel);
-        let optionText = labelEl ? labelEl.textContent.trim() : "";
+        // 选项文本：优先 optionLabel，失配则用整行文本
+        let optionText = "";
+        if (typeSelectors.optionLabel) {
+          const labelEl = optionEl.querySelector(typeSelectors.optionLabel);
+          if (labelEl) optionText = labelEl.textContent.trim();
+        }
+        if (!optionText) optionText = optionEl.textContent.trim();
 
-        // 提取选项字母
         let optionLabel = String.fromCharCode(65 + idx); // 默认A, B, C...
-
         if (typeSelectors.optionLabelPattern && optionText) {
-          const pattern = new RegExp(typeSelectors.optionLabelPattern);
-          const match = optionText.match(pattern);
-          if (match && match[1]) {
+          try {
+            const match = optionText.match(
+              new RegExp(typeSelectors.optionLabelPattern)
+            );
+            if (match && match[1]) {
+              optionLabel = match[1];
+              optionText = optionText.substring(match[0].length).trim();
+            }
+          } catch (e) {}
+        } else {
+          const match = optionText.match(/^([A-Z])[\.\、\s]/);
+          if (match) {
             optionLabel = match[1];
-            // 移除前缀
             optionText = optionText.substring(match[0].length).trim();
           }
         }
 
-        // 生成精确选择器
-        const selector = this._generateSelector(input, template);
-
         options.push({
           label: optionLabel,
           text: optionText,
-          selector: selector,
+          selector: this._generateSelector(input, template),
           element: input,
         });
       });
@@ -189,22 +267,52 @@
     }
 
     /**
+     * 直接从 input 列表解析选项（通用兜底）
+     * @private
+     */
+    _parseOptionsFromInputs(container, inputs, template) {
+      const options = [];
+      inputs.forEach((input, idx) => {
+        const label =
+          input.closest("label") ||
+          (input.id && container.querySelector(`label[for="${input.id}"]`)) ||
+          input.parentElement;
+        let optionText = label ? label.textContent.trim() : "";
+        let optionLabel = String.fromCharCode(65 + idx);
+        const match = optionText.match(/^([A-Z])[\.\、\s]/);
+        if (match) {
+          optionLabel = match[1];
+          optionText = optionText.substring(match[0].length).trim();
+        }
+        options.push({
+          label: optionLabel,
+          text: optionText,
+          selector: this._generateSelector(input, template),
+          element: input,
+        });
+      });
+      return options;
+    }
+
+    /**
      * 解析输入框
      * @private
      */
     _parseInputs(container, typeSelectors) {
-      const inputs = [];
-      const inputElements = container.querySelectorAll(typeSelectors.inputs);
+      const sel =
+        (typeSelectors && typeSelectors.inputs) ||
+        'input[type="text"], input:not([type]), textarea';
+      let inputElements = [];
+      try {
+        inputElements = Array.from(container.querySelectorAll(sel));
+      } catch (e) {
+        inputElements = [];
+      }
 
-      inputElements.forEach((input) => {
-        const selector = this._generateSelector(input);
-        inputs.push({
-          selector: selector,
-          element: input,
-        });
-      });
-
-      return inputs;
+      return inputElements.map((input) => ({
+        selector: this._generateSelector(input),
+        element: input,
+      }));
     }
 
     /**
